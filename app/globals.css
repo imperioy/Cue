@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+/* Fuerza el modo oscuro a responder a nuestra clase manual, no al sistema */
+@custom-variant dark (&:is(.dark *));
+
+/* Acento cinematográfico: indigo/azul cobalto */
+@layer base {
+  :root {
+    --accent: 79 70 229;        /* indigo-600 */
+    --accent-hover: 67 56 202;  /* indigo-700 */
+    --accent-light: 238 242 255; /* indigo-50 */
+  }
+}
