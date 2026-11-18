@@ -14,10 +14,12 @@ export default function Ajustes() {
 
   const handleExport = () => {
     try {
-      // Agrupamos el estado de libros y estanterías en un único objeto
+      // Exportamos todos los títulos de películas y series
       const exportData = {
-        books: books,
-        estanterias: shelves
+        app: 'Cue',
+        version: '1.0.0',
+        media: books,
+        exportDate: new Date().toISOString()
       }
       
       const dataStr = JSON.stringify(exportData, null, 2)
@@ -47,22 +49,16 @@ export default function Ajustes() {
       try {
         const importedData = JSON.parse(event.target?.result as string)
         
-        // Comprobamos si es el nuevo formato (objeto con books y estanterias / shelves)
         if (importedData && typeof importedData === 'object' && !Array.isArray(importedData)) {
-          if (importedData.books) {
-            localStorage.setItem('Cue-data', JSON.stringify(importedData.books))
-            setBooks(importedData.books)
-          }
-          const importedShelves = importedData.estanterias || importedData.shelves
-          if (importedShelves) {
-            localStorage.setItem('Cue-shelves', JSON.stringify(importedShelves))
-            setShelves(importedShelves)
+          const importedItems = importedData.media || importedData.books || importedData.items
+          if (importedItems) {
+            localStorage.setItem('Cue-data', JSON.stringify(importedItems))
+            setBooks(importedItems)
           }
           
           setStatus({ type: 'success', msg: dict.successImport })
           setTimeout(() => window.location.reload(), 2000)
           
-        // Retrocompatibilidad: por si intentas importar un backup antiguo (que solo era un Array de libros)
         } else if (Array.isArray(importedData)) {
           localStorage.setItem('Cue-data', JSON.stringify(importedData))
           setBooks(importedData)

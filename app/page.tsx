@@ -1,379 +1,1003 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { Search, X, ArrowRightLeft, Star, Calendar, Loader2, Trash2, BarChart2, Film, Hash, TrendingUp, CalendarDays } from 'lucide-react'
-import { useBooks, Book } from './context/BookContext'
+import { useState, useMemo } from 'react'
+import {
+  Search,
+  X,
+  Star,
+  Trash2,
+  BarChart2,
+  Film,
+  Tv,
+  Plus,
+  Clapperboard,
+  CheckCircle2,
+  Clock,
+  ArrowRightLeft,
+  Loader2,
+  Tag
+} from 'lucide-react'
+import { useBooks, MediaItem, TemporadaDetalle, formatHttpsUrl, sanitizeRating } from './context/BookContext'
+import TmdbSearchBar, { TMDB_GENRES, TmdbItem } from '@/components/TmdbSearchBar'
 
-export default function Libreria() {
-  const { books, addBook, updateBook, removeBook, t } = useBooks()
-  const lib = t.library
+const CATEGORIAS_SUGERIDAS = [
+  'Acción',
+  'Animación',
+  'Anime',
+  'Aventura',
+  'Ciencia Ficción',
+  'Comedia',
+  'Crimen',
+  'Documental',
+  'Drama',
+  'Fantasía',
+  'Misterio',
+  'Romance',
+  'Suspense',
+  'Terror',
+  'Western'
+]
 
-  const [query, setQuery] = useState('')
-  const [results, setResults] = useState<any[]>([])
-  const [isSearching, setIsSearching] = useState(false)
-  const [searchError, setSearchError] = useState('')
-  
-  const [selectedBook, setSelectedBook] = useState<Book | null>(null)
-  const [showStats, setShowStats] = useState(false)
-  const [sortBy, setSortBy] = useState('date-desc')
-  
-  const [filterStart, setFilterStart] = useState('')
-  const [filterEnd, setFilterEnd] = useState('')
-  const [showDateFilter, setShowDateFilter] = useState(false)
+export default function Coleccion() {
+  const { media, addMedia, updateMedia, removeMedia } = useBooks()
 
-  // Buscador local
+  // Filtros locales
   const [localQuery, setLocalQuery] = useState('')
-  
-  const myBooks = books.filter(b => b.status === 'libreria')
+  const [filterType, setFilterType] = useState<'todos' | 'pelicula' | 'serie' | 'viendo' | 'vista'>('todos')
+  const [sortBy, setSortBy] = useState('date-desc')
+  const [showStats, setShowStats] = useState(false)
 
-  const formatLabel = (fmt: string | undefined) => {
-    if (!fmt) return fmt
-    if (fmt === 'Físico') return lib.formatPhysical
-    if (fmt === 'Audiolibro') return lib.formatAudiobook
-    if (fmt === 'E-book') return lib.formatEbook
-    return fmt
+  // Modal añadir / editar
+  const [isModalOpen, setIsModalOpen] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
+
+  // Estado del formulario simplificado y reordenado
+  const [formTipo, setFormTipo] = useState<'pelicula' | 'serie'>('pelicula')
+  const [formPortada, setFormPortada] = useState('')
+  const [formTitulo, setFormTitulo] = useState('')
+  const [formCategoria, setFormCategoria] = useState('')
+  const [formEstado, setFormEstado] = useState<'pendiente' | 'viendo' | 'vista'>('vista')
+  const [formValoracion, setFormValoracion] = useState<string>('')
+  const [formModoValoracion, setFormModoValoracion] = useState<'general' | 'temporadas'>('general')
+  const [formTemporadasDetalle, setFormTemporadasDetalle] = useState<
+    { temporada: number; valoracion: string; notas: string }[]
+  >([{ temporada: 1, valoracion: '', notas: '' }])
+  const [formTemporada, setFormTemporada] = useState<number>(1)
+  const [formEpisodio, setFormEpisodio] = useState<number>(1)
+  const [formNotas, setFormNotas] = useState('')
+  const [formAnioHidden, setFormAnioHidden] = useState('')
+
+  // Cálculo dinámico de la nota media de las temporadas
+  const mediaTemporadas = useMemo(() => {
+    const ratings = formTemporadasDetalle
+      .map(t => (t.valoracion.trim() !== '' ? parseFloat(t.valoracion) : NaN))
+      .filter(n => !isNaN(n) && n >= 0 && n <= 10)
+
+    if (ratings.length === 0) return undefined
+    const sum = ratings.reduce((acc, curr) => acc + curr, 0)
+    return parseFloat((sum / ratings.length).toFixed(1))
+  }, [formTemporadasDetalle])
+
+  // Funciones para gestionar temporadas dinámicas
+  const handleAddTemporada = () => {
+    setFormTemporadasDetalle(prev => [
+      ...prev,
+      { temporada: prev.length + 1, valoracion: '', notas: '' }
+    ])
   }
 
-  // Filtrado
-  const filteredBooks = myBooks.filter(b => {
-    if (filterStart || filterEnd) {
-      if (!b.endDate) return false
-      if (filterStart && b.endDate < filterStart) return false
-      if (filterEnd && b.endDate > filterEnd) return false
-    }
-    if (localQuery) {
-      const q = localQuery.toLowerCase();
-      const titleMatch = b.title.toLowerCase().includes(q);
-      const authorMatch = b.authors?.some(a => a.toLowerCase().includes(q));
-      if (!titleMatch && !authorMatch) return false;
-    }
-    return true
-  })
+  const handleRemoveTemporada = (indexToRemove: number) => {
+    setFormTemporadasDetalle(prev => {
+      if (prev.length <= 1) return prev
+      const filtered = prev.filter((_, idx) => idx !== indexToRemove)
+      return filtered.map((item, idx) => ({ ...item, temporada: idx + 1 }))
+    })
+  }
 
-  const sortedBooks = [...filteredBooks].sort((a, b) => {
-    if (sortBy === 'title-asc') return a.title.localeCompare(b.title)
-    if (sortBy === 'author-asc') return (a.authors[0] || '').localeCompare(b.authors[0] || '')
-    if (sortBy === 'rating-desc') return (b.rating || 0) - (a.rating || 0)
-    if (sortBy === 'date-desc') {
-      if (!a.endDate) return 1; if (!b.endDate) return -1;
-      return new Date(b.endDate).getTime() - new Date(a.endDate).getTime()
-    }
-    if (sortBy === 'date-asc') {
-      if (!a.endDate) return 1; if (!b.endDate) return -1;
-      return new Date(a.endDate).getTime() - new Date(b.endDate).getTime()
-    }
-    return 0
-  })
+  const handleUpdateTemporada = (
+    index: number,
+    field: 'valoracion' | 'notas',
+    value: string
+  ) => {
+    setFormTemporadasDetalle(prev => {
+      const updated = [...prev]
+      updated[index] = { ...updated[index], [field]: value }
+      return updated
+    })
+  }
 
-  const totalPages = filteredBooks.reduce((acc, book) => acc + (Number(book.pageCount) || 0), 0)
-  const ratedBooks = filteredBooks.filter(b => b.rating)
-  const avgRating = ratedBooks.length > 0 ? (ratedBooks.reduce((acc, book) => acc + (Number(book.rating) || 0), 0) / ratedBooks.length).toFixed(2) : '0.00'
+  // Títulos en Mi Colección (excluimos 'pendiente', que pertenecen a Quiero Ver)
+  const collectionItems = useMemo(() => {
+    return media.filter(item => item.estado !== 'pendiente')
+  }, [media])
+
+  // Filtrado de la colección local por título, categoría o notas
+  const filteredItems = useMemo(() => {
+    return collectionItems.filter(item => {
+      if (filterType === 'pelicula' && item.tipo !== 'pelicula') return false
+      if (filterType === 'serie' && item.tipo !== 'serie') return false
+      if (filterType === 'viendo' && item.estado !== 'viendo') return false
+      if (filterType === 'vista' && item.estado !== 'vista') return false
+
+      if (localQuery.trim()) {
+        const q = localQuery.toLowerCase()
+        const matchTitulo = item.titulo?.toLowerCase().includes(q)
+        const matchCategoria = item.categoria?.toLowerCase().includes(q)
+        const matchNotas = item.notas?.toLowerCase().includes(q)
+        if (!matchTitulo && !matchCategoria && !matchNotas) return false
+      }
+
+      return true
+    })
+  }, [collectionItems, filterType, localQuery])
+
+  // Ordenación de la colección local
+  const sortedItems = useMemo(() => {
+    return [...filteredItems].sort((a, b) => {
+      if (sortBy === 'title-asc') return (a.titulo || '').localeCompare(b.titulo || '')
+      if (sortBy === 'rating-desc') return (b.valoracion || 0) - (a.valoracion || 0)
+      if (sortBy === 'category-asc') return (a.categoria || '').localeCompare(b.categoria || '')
+      if (sortBy === 'date-asc') {
+        return (a.fechaAgregado || '').localeCompare(b.fechaAgregado || '')
+      }
+      return (b.fechaAgregado || '').localeCompare(a.fechaAgregado || '')
+    })
+  }, [filteredItems, sortBy])
+
+  // Métricas para estadísticas
+  const peliculasCount = collectionItems.filter(i => i.tipo === 'pelicula').length
+  const seriesCount = collectionItems.filter(i => i.tipo === 'serie').length
+  const viendoCount = collectionItems.filter(i => i.estado === 'viendo').length
+  const ratedItems = collectionItems.filter(i => i.valoracion !== undefined && i.valoracion !== null)
+  const avgRating = ratedItems.length > 0
+    ? (ratedItems.reduce((acc, curr) => acc + (Number(curr.valoracion) || 0), 0) / ratedItems.length).toFixed(1)
+    : '0.0'
+
+  const categoriasUsadas = collectionItems.map(i => i.categoria).filter(Boolean) as string[]
+  const categoriaFavorita = categoriasUsadas.length > 0
+    ? categoriasUsadas.sort((a, b) =>
+        categoriasUsadas.filter(v => v === a).length - categoriasUsadas.filter(v => v === b).length
+      ).pop()
+    : 'N/A'
+
+  // Al seleccionar un resultado de TMDB, abre el modal pre-rellenado
+  const handleSelectTmdbItem = (item: TmdbItem, defaultEstado: 'vista' | 'pendiente' = 'vista') => {
+    const isMovie = item.media_type === 'movie'
+    const title = isMovie ? item.title : item.name
+    const releaseDate = isMovie ? item.release_date : item.first_air_date
+    const year = releaseDate ? releaseDate.slice(0, 4) : ''
+    const posterUrl = item.poster_path
+      ? `https://image.tmdb.org/t/p/w500${item.poster_path}`
+      : ''
+
+    // Mapear género principal automáticamente desde TMDB
+    let mainGenre = ''
+    if (item.genre_ids && item.genre_ids.length > 0) {
+      mainGenre = TMDB_GENRES[item.genre_ids[0]] || ''
+    } else if (item.genres && item.genres.length > 0) {
+      mainGenre = item.genres[0].name || ''
+    }
+
+    setEditingId(null)
+    setFormTipo(isMovie ? 'pelicula' : 'serie')
+    setFormPortada(posterUrl)
+    setFormTitulo(title || '')
+    setFormCategoria(mainGenre)
+    setFormEstado(defaultEstado)
+    // NUNCA autorrellenar la valoración desde TMDB: la nota es puramente personal
+    setFormValoracion('')
+    setFormModoValoracion('general')
+    setFormTemporadasDetalle([{ temporada: 1, valoracion: '', notas: '' }])
+    setFormTemporada(1)
+    setFormEpisodio(1)
+    setFormNotas('') // Limpiar notas: empieza siempre vacío para notas personales
+    setFormAnioHidden(year)
+
+    setIsModalOpen(true)
+  }
+
+  // Abrir modal para crear manualmente
+  const handleOpenCreate = () => {
+    setEditingId(null)
+    setFormTipo('pelicula')
+    setFormPortada('')
+    setFormTitulo('')
+    setFormCategoria('')
+    setFormEstado('vista')
+    setFormValoracion('')
+    setFormModoValoracion('general')
+    setFormTemporadasDetalle([{ temporada: 1, valoracion: '', notas: '' }])
+    setFormTemporada(1)
+    setFormEpisodio(1)
+    setFormNotas('')
+    setFormAnioHidden(new Date().getFullYear().toString())
+    setIsModalOpen(true)
+  }
+
+  // Abrir modal para editar
+  const handleOpenEdit = (item: MediaItem) => {
+    setEditingId(item.id)
+    const isMovie = item.tipo === 'pelicula'
+    setFormTipo(item.tipo || 'pelicula')
+    setFormPortada(item.portada || '')
+    setFormTitulo(item.titulo || '')
+    setFormCategoria(item.categoria || '')
+    // Si es película y estaba en 'viendo', forzar a 'vista'
+    const cleanEstado = isMovie && item.estado === 'viendo' ? 'vista' : (item.estado || 'vista')
+    setFormEstado(cleanEstado)
+    setFormValoracion(item.valoracion !== undefined && item.valoracion !== null ? item.valoracion.toString() : '')
     
-  const [currentYear, setCurrentYear] = useState('')
-  useEffect(() => { setCurrentYear(new Date().getFullYear().toString()) }, [])
-  const booksThisYear = currentYear ? filteredBooks.filter(b => b.endDate && b.endDate.startsWith(currentYear)).length : 0
-  
-  const formats = filteredBooks.map(b => b.format).filter(Boolean) as string[]
-  const favoriteFormat = formats.length > 0 ? formats.sort((a,b) => formats.filter(v => v===a).length - formats.filter(v => v===b).length).pop() : 'N/A'
+    // Modo de valoración y detalle de temporadas
+    setFormModoValoracion(item.modoValoracion || 'general')
+    if (item.temporadasDetalle && item.temporadasDetalle.length > 0) {
+      setFormTemporadasDetalle(
+        item.temporadasDetalle.map(t => ({
+          temporada: t.temporada,
+          valoracion: t.valoracion !== undefined && t.valoracion !== null ? t.valoracion.toString() : '',
+          notas: t.notas || ''
+        }))
+      )
+    } else {
+      setFormTemporadasDetalle([{ temporada: 1, valoracion: '', notas: '' }])
+    }
 
-  const searchBooks = async (e: React.FormEvent) => {
+    setFormTemporada(item.temporadaActual || 1)
+    setFormEpisodio(item.episodioActual || 1)
+    setFormNotas(item.notas || '')
+    setFormAnioHidden(item.anio || '')
+    setIsModalOpen(true)
+  }
+
+  // Guardar (añadir o actualizar)
+  const handleSave = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!query.trim()) return
-    setIsSearching(true); setSearchError(''); setResults([])
-    try {
-      const res = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${encodeURIComponent(query)}&maxResults=5&key=${process.env.NEXT_PUBLIC_BOOKS_API_KEY}`)
-      if (!res.ok) throw new Error('API Error')
-      const data = await res.json()
-      if (data.items && data.items.length > 0) setResults(data.items)
-      else setSearchError(lib.noResults)
-    } catch { setSearchError(lib.connectionError) } 
-    finally { setIsSearching(false) }
-  }
+    if (!formTitulo.trim()) return
 
-  const handleAdd = (apiBook: any, status: 'libreria' | 'pendiente') => {
-    const info = apiBook.volumeInfo
-    const newBook: Book = {
-      id: apiBook.id, title: info.title, authors: info.authors || ['N/A'],
-      thumbnail: (info.imageLinks?.thumbnail || 'https://via.placeholder.com/128x192?text=NA').replace(/^http:\/\//i, 'https://'),
-      status: status, pageCount: info.pageCount || 0 
+    const cleanEstado = formTipo === 'pelicula' && formEstado === 'viendo' ? 'vista' : formEstado
+    const isWatchingSerie = formTipo === 'serie' && cleanEstado === 'viendo'
+
+    // Cálculo de valoración y temporadas
+    let finalRating: number | undefined
+    let finalModoValoracion: 'general' | 'temporadas' | undefined
+    let finalTemporadasDetalle: TemporadaDetalle[] | undefined
+
+    if (formTipo === 'serie' && formModoValoracion === 'temporadas') {
+      finalModoValoracion = 'temporadas'
+      finalRating = sanitizeRating(mediaTemporadas)
+      finalTemporadasDetalle = formTemporadasDetalle.map(t => ({
+        temporada: t.temporada,
+        valoracion: sanitizeRating(t.valoracion.trim() !== '' ? parseFloat(t.valoracion) : undefined),
+        notas: t.notas.trim() || undefined
+      }))
+    } else {
+      finalModoValoracion = formTipo === 'serie' ? 'general' : undefined
+      const parsedRating = formValoracion !== '' ? parseFloat(formValoracion) : undefined
+      finalRating = sanitizeRating(parsedRating)
+      finalTemporadasDetalle = undefined
     }
-    if (!books.find(b => b.id === newBook.id)) addBook(newBook)
-    setResults([]); setQuery('')
-  }
 
-  const handleUpdate = (updates: Partial<Book>) => {
-    if (selectedBook) {
-      updateBook(selectedBook.id, updates)
-      setSelectedBook({ ...selectedBook, ...updates })
+    if (editingId) {
+      updateMedia(editingId, {
+        titulo: formTitulo.trim(),
+        tipo: formTipo,
+        portada: formatHttpsUrl(formPortada),
+        categoria: formCategoria.trim() || undefined,
+        anio: formAnioHidden || undefined,
+        estado: cleanEstado,
+        valoracion: finalRating,
+        modoValoracion: finalModoValoracion,
+        temporadasDetalle: finalTemporadasDetalle,
+        temporadaActual: isWatchingSerie ? Number(formTemporada) || 1 : undefined,
+        episodioActual: isWatchingSerie ? Number(formEpisodio) || 1 : undefined,
+        notas: formNotas.trim()
+      })
+    } else {
+      const newItem: MediaItem = {
+        id: Date.now().toString(),
+        titulo: formTitulo.trim(),
+        tipo: formTipo,
+        portada: formatHttpsUrl(formPortada),
+        categoria: formCategoria.trim() || undefined,
+        anio: formAnioHidden || new Date().getFullYear().toString(),
+        estado: cleanEstado,
+        valoracion: finalRating,
+        modoValoracion: finalModoValoracion,
+        temporadasDetalle: finalTemporadasDetalle,
+        temporadaActual: isWatchingSerie ? Number(formTemporada) || 1 : undefined,
+        episodioActual: isWatchingSerie ? Number(formEpisodio) || 1 : undefined,
+        notas: formNotas.trim(),
+        fechaAgregado: new Date().toISOString().split('T')[0]
+      }
+      addMedia(newItem)
     }
+
+    setIsModalOpen(false)
+    setEditingId(null)
   }
 
+  // Eliminar
   const handleDelete = () => {
-    if (selectedBook) { removeBook(selectedBook.id); setSelectedBook(null) }
+    if (editingId) {
+      removeMedia(editingId)
+      setIsModalOpen(false)
+      setEditingId(null)
+    }
+  }
+
+  // Mover a Pendientes
+  const handleMoveToPending = () => {
+    if (editingId) {
+      updateMedia(editingId, { estado: 'pendiente' })
+      setIsModalOpen(false)
+      setEditingId(null)
+    }
   }
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto relative">
-      <form onSubmit={searchBooks} className="flex gap-2 relative">
-        <input type="text" placeholder={lib.searchPlaceholder} className="w-full p-3 rounded-xl border border-gray-300 dark:border-neutral-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-neutral-900 dark:text-white" value={query} onChange={(e) => setQuery(e.target.value)} />
-        <button type="submit" disabled={isSearching} className="bg-indigo-600 text-white p-3 rounded-xl hover:bg-indigo-700 disabled:bg-indigo-400 flex items-center justify-center min-w-[50px]">
-          {isSearching ? <Loader2 size={20} className="animate-spin" /> : <Search size={20} />}
-        </button>
-      </form>
-      {searchError && <div className="bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 p-3 rounded-lg text-sm border border-red-200 dark:border-red-900/50">{searchError}</div>}
+      {/* 1. BUSCADOR ONLINE TMDB (En la parte superior, encima de Mi Colección) */}
+      <TmdbSearchBar onSelectItem={handleSelectTmdbItem} defaultEstado="vista" />
 
-      {results.length > 0 && (
-        <div className="absolute top-14 left-0 right-0 bg-white dark:bg-neutral-900 rounded-xl shadow-xl border border-gray-100 dark:border-neutral-800 p-2 space-y-2 z-40">
-          {results.map((book) => (
-            <div key={book.id} className="flex gap-3 items-center p-2 border-b dark:border-neutral-800 last:border-0 hover:bg-gray-50 dark:hover:bg-neutral-800 rounded">
-              <img src={book.volumeInfo.imageLinks?.smallThumbnail?.replace(/^http:\/\//i, 'https://') || 'https://via.placeholder.com/40x60?text=NA'} alt="Cover" className="w-12 h-16 object-cover rounded shadow-sm" />
-              <div className="flex-1">
-                <p className="font-semibold text-sm line-clamp-1 dark:text-white">{book.volumeInfo.title}</p>
-                <p className="text-xs text-gray-500 dark:text-neutral-400 line-clamp-1">{book.volumeInfo.authors?.join(', ')}</p>
-                <p className="text-[10px] text-gray-400 dark:text-neutral-500 mt-0.5">{book.volumeInfo.pageCount ? `${book.volumeInfo.pageCount} ${lib.pages}` : ''}</p>
+      {/* 2. CABECERA DE MI COLECCIÓN */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2">
+        <div>
+          <h2 className="text-2xl font-black text-gray-900 dark:text-white tracking-tight flex items-center gap-2">
+            <Clapperboard className="text-indigo-600 dark:text-indigo-400" size={26} />
+            Mi Colección
+            <span className="text-sm font-semibold bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 px-2.5 py-0.5 rounded-full border border-indigo-200/60 dark:border-indigo-800/60">
+              {filteredItems.length}
+            </span>
+          </h2>
+          <p className="text-xs text-gray-500 dark:text-neutral-400">
+            Películas y series que has visto o estás viendo
+          </p>
+        </div>
+
+        <button
+          onClick={handleOpenCreate}
+          className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold px-4 py-2.5 rounded-xl shadow-sm transition active:scale-95 text-sm"
+        >
+          <Plus size={18} />
+          <span>Añadir Título</span>
+        </button>
+      </div>
+
+      {/* 3. CONTROLES LOCALES (Buscador local por título/categoría, Orden y Estadísticas) */}
+      <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
+        <div className="relative flex-1">
+          <input
+            type="text"
+            placeholder="Filtrar por título o categoría..."
+            value={localQuery}
+            onChange={e => setLocalQuery(e.target.value)}
+            className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-gray-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-sm focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white shadow-sm transition"
+          />
+          <Search size={16} className="absolute left-3 top-3 text-gray-400" />
+          {localQuery && (
+            <button
+              onClick={() => setLocalQuery('')}
+              className="absolute right-3 top-3 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <select
+            className="p-2.5 border border-gray-200 dark:border-neutral-700 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-neutral-900 text-gray-700 dark:text-neutral-200 shadow-sm"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+          >
+            <option value="date-desc">Añadidos recientes</option>
+            <option value="date-asc">Añadidos antiguos</option>
+            <option value="rating-desc">Mejor valorados</option>
+            <option value="category-asc">Categoría (A-Z)</option>
+            <option value="title-asc">Título (A-Z)</option>
+          </select>
+
+          <button
+            onClick={() => setShowStats(true)}
+            className="bg-gray-800 dark:bg-neutral-800 text-white p-2.5 rounded-xl hover:bg-gray-700 dark:hover:bg-neutral-700 transition shadow-sm flex items-center justify-center shrink-0"
+            title="Estadísticas"
+          >
+            <BarChart2 size={18} />
+          </button>
+        </div>
+      </div>
+
+      {/* 4. CHIPS DE FILTRADO */}
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+        <button
+          onClick={() => setFilterType('todos')}
+          className={`px-3 py-1.5 rounded-lg font-medium transition shrink-0 ${
+            filterType === 'todos'
+              ? 'bg-indigo-600 text-white'
+              : 'bg-white dark:bg-neutral-900 text-gray-600 dark:text-neutral-300 hover:bg-gray-100 dark:hover:bg-neutral-800 border border-gray-200 dark:border-neutral-800'
+          }`}
+        >
+          Todos ({collectionItems.length})
+        </button>
+        <button
+          onClick={() => setFilterType('pelicula')}
+          className={`px-3 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5 shrink-0 ${
+            filterType === 'pelicula'
+              ? 'bg-indigo-600 text-white'
+              : 'bg-white dark:bg-neutral-900 text-gray-600 dark:text-neutral-300 hover:bg-gray-100 dark:hover:bg-neutral-800 border border-gray-200 dark:border-neutral-800'
+          }`}
+        >
+          <Film size={14} /> Películas ({peliculasCount})
+        </button>
+        <button
+          onClick={() => setFilterType('serie')}
+          className={`px-3 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5 shrink-0 ${
+            filterType === 'serie'
+              ? 'bg-indigo-600 text-white'
+              : 'bg-white dark:bg-neutral-900 text-gray-600 dark:text-neutral-300 hover:bg-gray-100 dark:hover:bg-neutral-800 border border-gray-200 dark:border-neutral-800'
+          }`}
+        >
+          <Tv size={14} /> Series ({seriesCount})
+        </button>
+        <button
+          onClick={() => setFilterType('viendo')}
+          className={`px-3 py-1.5 rounded-lg font-medium transition flex items-center gap-1.5 shrink-0 ${
+            filterType === 'viendo'
+              ? 'bg-indigo-600 text-white'
+              : 'bg-white dark:bg-neutral-900 text-gray-600 dark:text-neutral-300 hover:bg-gray-100 dark:hover:bg-neutral-800 border border-gray-200 dark:border-neutral-800'
+          }`}
+        >
+          <Clock size={14} /> Viendo ({viendoCount})
+        </button>
+      </div>
+
+      {/* 5. CUADRÍCULA DE TARJETAS */}
+      {sortedItems.length === 0 ? (
+        <div className="text-center p-12 bg-white dark:bg-neutral-900 rounded-2xl border border-dashed border-gray-200 dark:border-neutral-800">
+          <Clapperboard size={36} className="mx-auto text-gray-400 dark:text-neutral-500 mb-3" />
+          <p className="text-base font-semibold text-gray-700 dark:text-gray-300">
+            {localQuery.trim() ? 'No hay títulos que coincidan con la búsqueda' : 'Tu colección está vacía'}
+          </p>
+          <p className="text-xs text-gray-400 dark:text-neutral-500 mt-1 max-w-sm mx-auto">
+            {localQuery.trim()
+              ? 'Prueba con otro término o limpia el filtro.'
+              : 'Busca una película o serie arriba en TMDB para añadirla o pulsa en añadir título.'}
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 sm:gap-5">
+          {sortedItems.map((item) => (
+            <div
+              key={item.id}
+              className="flex flex-col group cursor-pointer relative bg-white dark:bg-neutral-900 rounded-xl overflow-hidden border border-gray-100 dark:border-neutral-800 hover:shadow-lg hover:border-indigo-200 dark:hover:border-indigo-900/60 transition-all duration-200"
+              onClick={() => handleOpenEdit(item)}
+            >
+              <div className="relative aspect-[2/3] w-full overflow-hidden bg-neutral-200 dark:bg-neutral-800">
+                <img
+                  src={item.portada || 'https://via.placeholder.com/300x450?text=Cue'}
+                  alt={item.titulo}
+                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = 'https://via.placeholder.com/300x450?text=Cue'
+                  }}
+                />
+
+                <span className="absolute top-2 left-2 bg-black/75 backdrop-blur-md text-white text-[10px] font-bold px-2 py-0.5 rounded-md shadow flex items-center gap-1">
+                  {item.tipo === 'serie' ? <Tv size={10} /> : <Film size={10} />}
+                  {item.tipo === 'pelicula' ? 'Película' : 'Serie'}
+                </span>
+
+                {item.estado === 'viendo' && item.tipo === 'serie' && (
+                  <span className="absolute top-2 right-2 bg-indigo-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-md shadow">
+                    T{item.temporadaActual || 1}:E{item.episodioActual || 1}
+                  </span>
+                )}
+                {item.estado === 'viendo' && item.tipo === 'pelicula' && (
+                  <span className="absolute top-2 right-2 bg-indigo-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-md shadow">
+                    Viendo
+                  </span>
+                )}
               </div>
-              <div className="flex flex-col gap-1 sm:flex-row">
-                <button onClick={() => handleAdd(book, 'libreria')} className="text-[10px] sm:text-xs bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400 px-2 py-1 rounded">{lib.toLibrary}</button>
-                <button onClick={() => handleAdd(book, 'pendiente')} className="text-[10px] sm:text-xs bg-gray-100 dark:bg-neutral-800 text-gray-700 dark:text-neutral-300 px-2 py-1 rounded">{lib.toPending}</button>
+
+              <div className="p-3 flex flex-col flex-1 justify-between">
+                <div>
+                  <p className="text-sm font-bold text-gray-900 dark:text-gray-100 line-clamp-1 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                    {item.titulo}
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-neutral-400 mt-0.5 font-medium truncate flex items-center gap-1">
+                    <Tag size={11} className="shrink-0 text-indigo-500" />
+                    <span>{item.categoria || (item.tipo === 'pelicula' ? 'Película' : 'Serie')}</span>
+                  </p>
+                </div>
+
+                <div className="flex justify-between items-center mt-2.5 pt-2 border-t border-gray-100 dark:border-neutral-800">
+                  {item.valoracion !== undefined && item.valoracion !== null ? (
+                    <div className="flex items-center gap-1 text-yellow-500">
+                      <Star size={13} fill="currentColor" />
+                      <span className="text-xs font-bold text-gray-800 dark:text-neutral-200">
+                        {Number(item.valoracion).toFixed(1)}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="text-[11px] text-gray-400 dark:text-neutral-500">—</span>
+                  )}
+
+                  {item.categoria ? (
+                    <span className="text-[10px] font-semibold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded-md border border-indigo-200/60 dark:border-indigo-800/50 truncate max-w-[95px]">
+                      {item.categoria}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] text-gray-400 dark:text-neutral-500 capitalize">
+                      {item.tipo}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           ))}
-          <button onClick={() => setResults([])} className="w-full text-center text-sm text-gray-400 dark:text-neutral-500 pt-2">{lib.close}</button>
         </div>
       )}
 
-      <div>
-        {/* CABECERA DE LA LIBRERÍA CON EL BUSCADOR */}
-        <div className="flex flex-col md:flex-row md:justify-between md:items-center mb-4 gap-3">
-          <h2 className="text-lg font-bold text-gray-800 dark:text-white whitespace-nowrap">{lib.title} ({filteredBooks.length})</h2>
-          
-          <div className="relative flex-1 md:max-w-[200px] lg:max-w-xs">
-            <input 
-              type="text" 
-              placeholder={lib.filterPlaceholder} 
-              value={localQuery} 
-              onChange={e => setLocalQuery(e.target.value)} 
-              className="w-full pl-9 pr-3 py-2 rounded-lg border border-gray-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-sm focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white shadow-sm transition" 
-            />
-            <Search size={16} className="absolute left-3 top-2.5 text-gray-400" />
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button onClick={() => setShowDateFilter(!showDateFilter)} className={`p-2 rounded-lg transition shadow-sm border ${showDateFilter || filterStart || filterEnd ? 'bg-indigo-100 border-indigo-300 text-indigo-700 dark:bg-indigo-900/40 dark:border-indigo-800 dark:text-indigo-400' : 'bg-white dark:bg-neutral-900 text-gray-700 dark:text-neutral-300 hover:bg-gray-50 dark:hover:bg-neutral-800 dark:border-neutral-700'}`}>
-              <CalendarDays size={20} />
-            </button>
-            <select className="p-2 border border-gray-200 dark:border-neutral-700 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-neutral-900 text-gray-700 dark:text-neutral-200 shadow-sm" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-              <option value="date-desc">{lib.sortRecent}</option>
-              <option value="date-asc">{lib.sortOldest}</option>
-              <option value="rating-desc">{lib.sortRating}</option>
-              <option value="title-asc">{lib.sortTitle}</option>
-              <option value="author-asc">{lib.sortAuthor}</option>
-            </select>
-            <button onClick={() => setShowStats(true)} className="bg-gray-800 dark:bg-neutral-800 text-white p-2 rounded-lg hover:bg-gray-700 dark:hover:bg-neutral-700 transition shadow-sm flex items-center justify-center">
-              <BarChart2 size={20} />
-            </button>
-          </div>
-        </div>
-
-        {showDateFilter && (
-          <div className="flex flex-wrap items-center gap-3 bg-indigo-50 dark:bg-indigo-900/10 p-4 rounded-xl mb-6 border border-indigo-100 dark:border-indigo-900/30">
-            <span className="text-sm font-bold text-indigo-900 dark:text-indigo-400">{lib.period}</span>
-            <div className="flex items-center gap-2">
-              <input type="date" className="p-2 rounded-lg text-sm border dark:border-neutral-700 focus:ring-2 focus:ring-indigo-500 outline-none dark:bg-neutral-900 dark:text-white" value={filterStart} onChange={e => setFilterStart(e.target.value)} />
-              <span className="text-indigo-800 dark:text-indigo-500 font-medium">{lib.periodTo}</span>
-              <input type="date" className="p-2 rounded-lg text-sm border dark:border-neutral-700 focus:ring-2 focus:ring-indigo-500 outline-none dark:bg-neutral-900 dark:text-white" value={filterEnd} onChange={e => setFilterEnd(e.target.value)} />
-            </div>
-            {(filterStart || filterEnd) && (
-              <button onClick={() => {setFilterStart(''); setFilterEnd('')}} className="text-sm bg-white dark:bg-neutral-900 text-red-600 dark:text-red-400 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900/30 hover:bg-red-50 dark:hover:bg-red-900/20 font-medium transition ml-auto">{lib.clearFilter}</button>
-            )}
-          </div>
-        )}
-
-        {filteredBooks.length === 0 ? (
-          <div className="text-center p-10 bg-white dark:bg-neutral-900 rounded-xl border border-dashed border-gray-300 dark:border-neutral-700">
-            <p className="text-gray-500 dark:text-neutral-400 text-sm">{lib.emptyState}</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
-            {sortedBooks.map((book) => (
-              <div key={book.id} className="flex flex-col group cursor-pointer relative" onClick={() => setSelectedBook(book)}>
-                {book.abandoned && <span className="absolute top-2 right-2 bg-red-600 text-white text-[10px] font-bold px-2 py-1 rounded-full z-10 shadow">{lib.abandonedLabel}</span>}
-                <img src={book.thumbnail?.replace(/^http:\/\//i, 'https://')} alt={book.title} className={`w-full aspect-[2/3] object-cover rounded-lg shadow-md mb-3 group-hover:scale-105 transition duration-200 ${book.abandoned ? 'opacity-60 grayscale-[50%]' : ''}`} />
-                <p className="text-sm font-semibold text-gray-800 dark:text-gray-200 line-clamp-1">{book.title}</p>
-                <p className="text-xs text-gray-500 dark:text-neutral-400 line-clamp-1 mb-1">{book.authors.join(', ')}</p>
-                <div className="flex justify-between items-center mt-1">
-                  {book.rating !== undefined && book.rating !== null && (
-                    <div className="flex items-center gap-1 text-yellow-500">
-                      <Star size={14} fill="currentColor" />
-                      <span className="text-xs font-bold text-gray-700 dark:text-neutral-300">{Math.round(Number(book.rating) * 100) / 100}</span>
-                    </div>
-                  )}
-                  {book.format && <span className="text-[10px] bg-gray-100 dark:bg-neutral-800 text-gray-600 dark:text-neutral-300 px-1.5 py-0.5 rounded border dark:border-neutral-700">{formatLabel(book.format)}</span>}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
+      {/* Modal de Estadísticas */}
       {showStats && (
         <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white dark:bg-neutral-900 rounded-2xl w-full max-w-md shadow-2xl flex flex-col overflow-hidden transition-colors border dark:border-neutral-800">
-            <div className="flex justify-between items-center p-4 bg-gray-800 dark:bg-neutral-950 text-white border-b dark:border-neutral-800">
+          <div className="bg-white dark:bg-neutral-900 rounded-2xl w-full max-w-md shadow-2xl flex flex-col overflow-hidden border dark:border-neutral-800">
+            <div className="flex justify-between items-center p-4 bg-gray-900 text-white">
               <h3 className="font-bold text-lg flex items-center gap-2">
-                <TrendingUp size={20}/> {filterStart || filterEnd ? lib.statsPeriod : lib.stats}
+                <BarChart2 size={20} className="text-indigo-400" /> Estadísticas de Cue
               </h3>
-              <button onClick={() => setShowStats(false)} className="p-1 hover:bg-gray-700 dark:hover:bg-neutral-800 rounded-full transition"><X size={24} /></button>
+              <button
+                onClick={() => setShowStats(false)}
+                className="p-1 hover:bg-neutral-800 rounded-full transition"
+              >
+                <X size={20} />
+              </button>
             </div>
-            <div className="bg-gray-50 dark:bg-neutral-900 p-4 border-b dark:border-neutral-800 flex flex-col sm:flex-row items-center gap-3 justify-center">
-              <span className="text-sm font-bold text-gray-700 dark:text-neutral-300">{lib.period}</span>
-              <div className="flex items-center gap-2">
-                <input type="date" className="p-1.5 rounded-md text-sm border dark:border-neutral-700 outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-neutral-800 dark:text-white" value={filterStart} onChange={e => setFilterStart(e.target.value)} />
-                <span className="text-gray-500 dark:text-neutral-500">-</span>
-                <input type="date" className="p-1.5 rounded-md text-sm border dark:border-neutral-700 outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-neutral-800 dark:text-white" value={filterEnd} onChange={e => setFilterEnd(e.target.value)} />
-              </div>
-              {(filterStart || filterEnd) && (
-                <button onClick={() => {setFilterStart(''); setFilterEnd('')}} className="text-xs text-red-600 dark:text-red-400 hover:underline font-medium">{lib.clearFilter}</button>
-              )}
-            </div>
+
             <div className="p-6 grid grid-cols-2 gap-4">
-              <div className="bg-indigo-50 dark:bg-indigo-900/10 p-4 rounded-xl border border-indigo-100 dark:border-indigo-900/30 flex flex-col items-center justify-center text-center">
-                <Film size={28} className="text-indigo-500 dark:text-indigo-400 mb-2" />
-                <p className="text-3xl font-black text-indigo-900 dark:text-indigo-100">{filteredBooks.length}</p>
-                <p className="text-xs text-indigo-600 dark:text-indigo-400 font-medium uppercase mt-1">{lib.totalBooks}</p>
+              <div className="bg-indigo-50 dark:bg-indigo-950/40 p-4 rounded-xl border border-indigo-100 dark:border-indigo-900/40 text-center">
+                <Film size={26} className="text-indigo-600 dark:text-indigo-400 mx-auto mb-1" />
+                <p className="text-3xl font-black text-indigo-950 dark:text-indigo-100">{collectionItems.length}</p>
+                <p className="text-xs text-indigo-600 dark:text-indigo-400 font-semibold uppercase mt-1">Total Títulos</p>
               </div>
-              <div className="bg-green-50 dark:bg-green-900/10 p-4 rounded-xl border border-green-100 dark:border-green-900/30 flex flex-col items-center justify-center text-center">
-                <Hash size={28} className="text-green-500 dark:text-green-400 mb-2" />
-                <p className="text-3xl font-black text-green-900 dark:text-green-100">{totalPages}</p>
-                <p className="text-xs text-green-600 dark:text-green-400 font-medium uppercase mt-1">{lib.totalPages}</p>
+
+              <div className="bg-purple-50 dark:bg-purple-950/40 p-4 rounded-xl border border-purple-100 dark:border-purple-900/40 text-center">
+                <Tv size={26} className="text-purple-600 dark:text-purple-400 mx-auto mb-1" />
+                <p className="text-3xl font-black text-purple-950 dark:text-purple-100">{seriesCount}</p>
+                <p className="text-xs text-purple-600 dark:text-purple-400 font-semibold uppercase mt-1">Series</p>
               </div>
-              <div className="bg-purple-50 dark:bg-purple-900/10 p-4 rounded-xl border border-purple-100 dark:border-purple-900/30 flex flex-col items-center justify-center text-center">
-                <Calendar size={28} className="text-purple-500 dark:text-purple-400 mb-2" />
-                <p className="text-3xl font-black text-purple-900 dark:text-purple-100">{filterStart || filterEnd ? filteredBooks.length : booksThisYear}</p>
-                <p className="text-xs text-purple-600 dark:text-purple-400 font-medium uppercase mt-1">{filterStart || filterEnd ? lib.inPeriod : `${lib.readIn} ${currentYear}`}</p>
+
+              <div className="bg-blue-50 dark:bg-blue-950/40 p-4 rounded-xl border border-blue-100 dark:border-blue-900/40 text-center">
+                <Clapperboard size={26} className="text-blue-600 dark:text-blue-400 mx-auto mb-1" />
+                <p className="text-3xl font-black text-blue-950 dark:text-blue-100">{peliculasCount}</p>
+                <p className="text-xs text-blue-600 dark:text-blue-400 font-semibold uppercase mt-1">Películas</p>
               </div>
-              <div className="bg-yellow-50 dark:bg-yellow-900/10 p-4 rounded-xl border border-yellow-100 dark:border-yellow-900/30 flex flex-col items-center justify-center text-center">
-                <Star size={28} className="text-yellow-500 dark:text-yellow-400 mb-2" />
-                <p className="text-3xl font-black text-yellow-900 dark:text-yellow-100">{avgRating}</p>
-                <p className="text-xs text-yellow-600 dark:text-yellow-400 font-medium uppercase mt-1">{lib.avgRating}</p>
+
+              <div className="bg-yellow-50 dark:bg-yellow-950/40 p-4 rounded-xl border border-yellow-100 dark:border-yellow-900/40 text-center">
+                <Star size={26} className="text-yellow-500 mx-auto mb-1" />
+                <p className="text-3xl font-black text-yellow-950 dark:text-yellow-100">{avgRating}</p>
+                <p className="text-xs text-yellow-600 dark:text-yellow-400 font-semibold uppercase mt-1">Nota Media</p>
               </div>
             </div>
-            <div className="p-4 bg-gray-50 dark:bg-neutral-900 border-t dark:border-neutral-800 text-center text-sm text-gray-600 dark:text-neutral-400 flex justify-center items-center gap-2">
-              {lib.favoriteFormat} <span className="font-bold text-gray-900 dark:text-white px-2 py-1 bg-white dark:bg-neutral-800 border dark:border-neutral-700 rounded-md shadow-sm">{formatLabel(favoriteFormat)}</span>
+
+            <div className="p-4 bg-gray-50 dark:bg-neutral-900 border-t dark:border-neutral-800 text-center text-sm text-gray-600 dark:text-neutral-400">
+              Categoría favorita:{' '}
+              <span className="font-bold text-gray-900 dark:text-white px-2 py-0.5 bg-white dark:bg-neutral-800 border dark:border-neutral-700 rounded-md shadow-sm">
+                {categoriaFavorita}
+              </span>
             </div>
           </div>
         </div>
       )}
 
-      {selectedBook && (
-        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white dark:bg-neutral-900 rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col transition-colors border dark:border-neutral-800">
-            <div className="flex justify-between items-start p-4 border-b dark:border-neutral-800">
-              <div className="flex gap-4 min-w-0">
-                <img 
-                  src={selectedBook.thumbnail?.replace(/^http:\/\//i, 'https://') || 'https://via.placeholder.com/128x192?text=NA'} 
-                  alt="Cover" 
-                  className="w-16 h-24 object-cover rounded shadow shrink-0" 
-                  onError={(e) => { (e.target as HTMLImageElement).src = 'https://via.placeholder.com/128x192?text=NA' }}
-                />
-                <div className="min-w-0 flex-1">
-                  <h3 className="font-bold text-lg leading-tight dark:text-white line-clamp-2">{selectedBook.title}</h3>
-                  <p className="text-sm text-gray-500 dark:text-neutral-400 mt-1 line-clamp-1">{selectedBook.authors.join(', ')}</p>
-                </div>
-              </div>
-              <button onClick={() => setSelectedBook(null)} className="p-1 hover:bg-gray-100 dark:hover:bg-neutral-800 rounded-full dark:text-neutral-400 shrink-0"><X size={24} /></button>
+      {/* 6. MODAL AÑADIR / EDITAR TÍTULO (Reordenado y Simplificado) */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-white dark:bg-neutral-900 rounded-2xl w-full max-w-lg max-h-[92vh] overflow-y-auto shadow-2xl flex flex-col border dark:border-neutral-800 animate-in fade-in zoom-in-95 duration-150">
+            {/* Cabecera del Modal */}
+            <div className="flex justify-between items-center p-4 border-b border-gray-100 dark:border-neutral-800 sticky top-0 bg-white/95 dark:bg-neutral-900/95 backdrop-blur z-10">
+              <h3 className="font-bold text-lg dark:text-white flex items-center gap-2">
+                {editingId ? 'Editar Título' : 'Añadir Película o Serie'}
+              </h3>
+              <button
+                onClick={() => setIsModalOpen(false)}
+                className="p-1.5 hover:bg-gray-100 dark:hover:bg-neutral-800 rounded-full dark:text-neutral-400 transition"
+              >
+                <X size={20} />
+              </button>
             </div>
-            <div className="p-5 space-y-4 flex-1">
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-neutral-400 mb-1">{lib.bookTitle}</label>
-                  <input 
-                    type="text" 
-                    className="w-full p-2 border dark:border-neutral-700 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-neutral-800 dark:text-white" 
-                    value={selectedBook.title} 
-                    onChange={(e) => handleUpdate({ title: e.target.value })} 
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-neutral-400 mb-1">{lib.coverUrl}</label>
-                  <input 
-                    type="text" 
-                    placeholder={lib.coverPlaceholder} 
-                    className="w-full p-2 border dark:border-neutral-700 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-neutral-800 dark:text-white" 
-                    value={selectedBook.thumbnail} 
-                    onChange={(e) => handleUpdate({ thumbnail: e.target.value, spineColor: undefined })} 
-                  />
+
+            {/* Formulario */}
+            <form onSubmit={handleSave} className="p-5 space-y-4 flex-1">
+              {/* 1. Selector de Tipo (Película o Serie) */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-neutral-400 mb-1.5">
+                  Tipo de contenido
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFormTipo('pelicula')
+                      if (formEstado === 'viendo') {
+                        setFormEstado('vista')
+                      }
+                    }}
+                    className={`py-2 px-3 rounded-xl border text-sm font-semibold flex items-center justify-center gap-2 transition ${
+                      formTipo === 'pelicula'
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                        : 'bg-white dark:bg-neutral-800 text-gray-700 dark:text-neutral-200 border-gray-200 dark:border-neutral-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    <Film size={16} /> Película
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFormTipo('serie')}
+                    className={`py-2 px-3 rounded-xl border text-sm font-semibold flex items-center justify-center gap-2 transition ${
+                      formTipo === 'serie'
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                        : 'bg-white dark:bg-neutral-800 text-gray-700 dark:text-neutral-200 border-gray-200 dark:border-neutral-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    <Tv size={16} /> Serie
+                  </button>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 pt-1">
+              {/* 2. URL del Póster (HTTPS) con vista previa al principio del formulario */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-neutral-400 mb-1">
+                  URL del póster (HTTPS)
+                </label>
+                <div className="flex gap-2.5 items-center">
+                  <input
+                    type="url"
+                    placeholder="https://image.tmdb.org/..."
+                    className="w-full p-2.5 border border-gray-200 dark:border-neutral-700 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-neutral-800 dark:text-white"
+                    value={formPortada}
+                    onChange={(e) => setFormPortada(e.target.value)}
+                  />
+                  {formPortada && (
+                    <img
+                      src={formatHttpsUrl(formPortada)}
+                      alt="Preview"
+                      className="w-10 h-14 object-cover rounded-lg border dark:border-neutral-700 shrink-0 shadow-sm"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = 'none'
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
+
+              {/* 3. Título */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-neutral-400 mb-1">
+                  Título <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ej: Interstellar, Breaking Bad..."
+                  className="w-full p-2.5 border border-gray-200 dark:border-neutral-700 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-neutral-800 dark:text-white"
+                  value={formTitulo}
+                  onChange={(e) => setFormTitulo(e.target.value)}
+                />
+              </div>
+
+              {/* 4. Categoría */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-neutral-400 mb-1">
+                  Categoría
+                </label>
+                <div className="relative">
+                  <input
+                    list="categorias-list"
+                    type="text"
+                    placeholder="Ej: Ciencia Ficción, Terror, Drama, Anime..."
+                    className="w-full p-2.5 border border-gray-200 dark:border-neutral-700 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-neutral-800 dark:text-white"
+                    value={formCategoria}
+                    onChange={(e) => setFormCategoria(e.target.value)}
+                  />
+                  <datalist id="categorias-list">
+                    {CATEGORIAS_SUGERIDAS.map(cat => (
+                      <option key={cat} value={cat} />
+                    ))}
+                  </datalist>
+                </div>
+              </div>
+
+              {/* 5. Estado (Condicionando el botón "Viendo" solo para series) */}
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-neutral-400 mb-1.5">
+                  Estado
+                </label>
+                <div className={`grid gap-2 ${formTipo === 'serie' ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                  <button
+                    type="button"
+                    onClick={() => setFormEstado('vista')}
+                    className={`py-2 px-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
+                      formEstado === 'vista'
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                        : 'bg-white dark:bg-neutral-800 text-gray-700 dark:text-neutral-300 border-gray-200 dark:border-neutral-700'
+                    }`}
+                  >
+                    <CheckCircle2 size={14} /> Vista
+                  </button>
+
+                  {/* El botón "Viendo" solo aparece cuando el tipo es Serie */}
+                  {formTipo === 'serie' && (
+                    <button
+                      type="button"
+                      onClick={() => setFormEstado('viendo')}
+                      className={`py-2 px-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
+                        formEstado === 'viendo'
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                          : 'bg-white dark:bg-neutral-800 text-gray-700 dark:text-neutral-300 border-gray-200 dark:border-neutral-700'
+                      }`}
+                    >
+                      <Clock size={14} /> Viendo
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => setFormEstado('pendiente')}
+                    className={`py-2 px-2 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 transition ${
+                      formEstado === 'pendiente'
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                        : 'bg-white dark:bg-neutral-800 text-gray-700 dark:text-neutral-300 border-gray-200 dark:border-neutral-700'
+                    }`}
+                  >
+                    <ArrowRightLeft size={14} /> Quiero Ver
+                  </button>
+                </div>
+              </div>
+
+              {/* 6. Progreso de la Serie (SOLO cuando es serie Y estado es viendo) */}
+              {formTipo === 'serie' && formEstado === 'viendo' && (
+                <div className="p-3.5 bg-indigo-50/60 dark:bg-indigo-950/30 rounded-xl border border-indigo-100 dark:border-indigo-900/40 space-y-2">
+                  <span className="block text-xs font-bold text-indigo-900 dark:text-indigo-300 uppercase tracking-wider">
+                    Progreso de la Serie
+                  </span>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-600 dark:text-neutral-400 mb-1">
+                        Temporada actual
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        className="w-full p-2 border border-gray-200 dark:border-neutral-700 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-neutral-800 dark:text-white"
+                        value={formTemporada}
+                        onChange={(e) => setFormTemporada(parseInt(e.target.value) || 1)}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-600 dark:text-neutral-400 mb-1">
+                        Episodio / Capítulo actual
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        className="w-full p-2 border border-gray-200 dark:border-neutral-700 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-neutral-800 dark:text-white"
+                        value={formEpisodio}
+                        onChange={(e) => setFormEpisodio(parseInt(e.target.value) || 1)}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 7. Selector de Modo de Valoración: SOLO PARA SERIES */}
+              {formTipo === 'serie' && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-neutral-300 mb-1">{lib.score} (0-10)</label>
-                  <div className="flex items-center gap-2">
-                    <Star className="text-yellow-500 shrink-0" size={18} fill={selectedBook.rating ? "currentColor" : "none"} />
-                    <input 
-                      type="number" 
-                      min="0" 
-                      max="10" 
-                      step="0.01" 
-                      className="w-full p-2 border dark:border-neutral-700 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-neutral-800 dark:text-white" 
-                      value={selectedBook.rating !== undefined && selectedBook.rating !== null ? selectedBook.rating : ''} 
-                      onChange={(e) => {
-                        const valStr = e.target.value
-                        if (valStr === '') {
-                          handleUpdate({ rating: undefined })
-                          return
-                        }
-                        let val = parseFloat(valStr)
-                        if (isNaN(val)) return
-                        if (val < 0) val = 0
-                        if (val > 10) val = 10
-                        val = Math.round(val * 100) / 100
-                        handleUpdate({ rating: val })
-                      }} 
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-neutral-400 mb-1.5">
+                    Modo de valoración y notas
+                  </label>
+                  <div className="grid grid-cols-2 p-1 bg-gray-100 dark:bg-neutral-800/80 rounded-xl border border-gray-200 dark:border-neutral-700">
+                    <button
+                      type="button"
+                      onClick={() => setFormModoValoracion('general')}
+                      className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
+                        formModoValoracion === 'general'
+                          ? 'bg-white dark:bg-neutral-700 text-indigo-600 dark:text-indigo-300 shadow-sm'
+                          : 'text-gray-500 dark:text-neutral-400 hover:text-gray-800 dark:hover:text-neutral-200'
+                      }`}
+                    >
+                      Serie entera
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFormModoValoracion('temporadas')}
+                      className={`py-1.5 px-3 rounded-lg text-xs font-semibold transition ${
+                        formModoValoracion === 'temporadas'
+                          ? 'bg-white dark:bg-neutral-700 text-indigo-600 dark:text-indigo-300 shadow-sm'
+                          : 'text-gray-500 dark:text-neutral-400 hover:text-gray-800 dark:hover:text-neutral-200'
+                      }`}
+                    >
+                      Por temporadas
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* 8. Sección de Valoración y Notas */}
+              {formTipo === 'pelicula' || formModoValoracion === 'general' ? (
+                <>
+                  {/* Valoración única (0 a 10) */}
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-neutral-400 mb-1">
+                      Valoración (0 a 10)
+                    </label>
+                    <div className="flex items-center gap-3">
+                      <Star className="text-yellow-500 shrink-0" size={20} fill={formValoracion ? 'currentColor' : 'none'} />
+                      <input
+                        type="number"
+                        min="0"
+                        max="10"
+                        step="0.1"
+                        placeholder="Ej: 8.5"
+                        className="w-full p-2.5 border border-gray-200 dark:border-neutral-700 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-neutral-800 dark:text-white"
+                        value={formValoracion}
+                        onChange={(e) => setFormValoracion(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Notas / Crítica personal */}
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-neutral-400 mb-1">
+                      Notas / Crítica personal
+                    </label>
+                    <textarea
+                      rows={3}
+                      placeholder="Escribe aquí tus notas o impresiones personales..."
+                      className="w-full p-3 border border-gray-200 dark:border-neutral-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none resize-none text-sm bg-white dark:bg-neutral-800 dark:text-white"
+                      value={formNotas}
+                      onChange={(e) => setFormNotas(e.target.value)}
+                    />
+                  </div>
+                </>
+              ) : (
+                /* Modo 'Por temporadas' */
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-neutral-400">
+                      Desglose por Temporadas
+                    </label>
+                    {mediaTemporadas !== undefined ? (
+                      <span className="flex items-center gap-1.5 text-xs font-bold bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border border-yellow-500/20 px-2.5 py-1 rounded-lg">
+                        <Star size={13} fill="currentColor" /> Media: {mediaTemporadas.toFixed(1)} / 10
+                      </span>
+                    ) : (
+                      <span className="text-xs text-gray-400 dark:text-neutral-500 italic">
+                        Sin nota media calculada
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Lista dinámica de temporadas */}
+                  <div className="space-y-3">
+                    {formTemporadasDetalle.map((temp, index) => (
+                      <div
+                        key={index}
+                        className="p-3.5 bg-gray-50/90 dark:bg-neutral-800/60 rounded-xl border border-gray-200 dark:border-neutral-700/80 space-y-2.5 transition"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-gray-800 dark:text-neutral-200 flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                            Temporada {temp.temporada}
+                          </span>
+                          {formTemporadasDetalle.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveTemporada(index)}
+                              className="text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 p-1 rounded-lg transition"
+                              title={`Eliminar Temporada ${temp.temporada}`}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-start">
+                          <div>
+                            <label className="block text-[11px] font-medium text-gray-500 dark:text-neutral-400 mb-1">
+                              Nota (0 a 10)
+                            </label>
+                            <div className="flex items-center gap-1.5">
+                              <Star
+                                size={16}
+                                className="text-yellow-500 shrink-0"
+                                fill={temp.valoracion ? 'currentColor' : 'none'}
+                              />
+                              <input
+                                type="number"
+                                min="0"
+                                max="10"
+                                step="0.1"
+                                placeholder="Ej: 8.5"
+                                className="w-full p-2 border border-gray-200 dark:border-neutral-700 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-neutral-900 dark:text-white"
+                                value={temp.valoracion}
+                                onChange={(e) => handleUpdateTemporada(index, 'valoracion', e.target.value)}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="sm:col-span-2">
+                            <label className="block text-[11px] font-medium text-gray-500 dark:text-neutral-400 mb-1">
+                              Notas de la Temporada {temp.temporada}
+                            </label>
+                            <textarea
+                              rows={2}
+                              placeholder={`Impresiones de la temporada ${temp.temporada}...`}
+                              className="w-full p-2 border border-gray-200 dark:border-neutral-700 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500 outline-none resize-none bg-white dark:bg-neutral-900 dark:text-white"
+                              value={temp.notas}
+                              onChange={(e) => handleUpdateTemporada(index, 'notas', e.target.value)}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Botón Añadir Temporada */}
+                  <button
+                    type="button"
+                    onClick={handleAddTemporada}
+                    className="w-full py-2.5 px-3 border border-dashed border-indigo-300 dark:border-indigo-700 hover:border-indigo-500 rounded-xl text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50/60 dark:hover:bg-indigo-950/40 flex items-center justify-center gap-1.5 transition active:scale-[0.99]"
+                  >
+                    <Plus size={15} /> Añadir Temporada {formTemporadasDetalle.length + 1}
+                  </button>
+
+                  {/* Notas generales de la serie (opcional) */}
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-neutral-400 mb-1">
+                      Notas generales de la serie (opcional)
+                    </label>
+                    <textarea
+                      rows={2}
+                      placeholder="Opinión global sobre la serie en conjunto..."
+                      className="w-full p-2.5 border border-gray-200 dark:border-neutral-700 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none resize-none text-xs bg-white dark:bg-neutral-800 dark:text-white"
+                      value={formNotas}
+                      onChange={(e) => setFormNotas(e.target.value)}
                     />
                   </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-neutral-300 mb-1">{lib.format}</label>
-                  <select className="w-full p-2 border dark:border-neutral-700 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-neutral-800 dark:text-white" value={selectedBook.format || ''} onChange={(e) => handleUpdate({ format: e.target.value as any })}>
-                    <option value="">{lib.selectFormat}</option>
-                    <option value="Físico">{lib.formatPhysical}</option>
-                    <option value="E-book">{lib.formatEbook}</option>
-                    <option value="Audiolibro">{lib.formatAudiobook}</option>
-                  </select>
-                </div>
+              )}
+
+              {/* Botones de acción */}
+              <div className="pt-2 flex flex-wrap gap-2 border-t border-gray-100 dark:border-neutral-800">
+                {editingId && (
+                  <button
+                    type="button"
+                    onClick={handleDelete}
+                    className="flex items-center justify-center p-2.5 bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/40 rounded-xl hover:bg-red-100 transition"
+                    title="Eliminar de la colección"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                )}
+
+                {editingId && formEstado !== 'pendiente' && (
+                  <button
+                    type="button"
+                    onClick={handleMoveToPending}
+                    className="flex-1 flex items-center justify-center gap-1.5 text-xs font-semibold bg-gray-100 dark:bg-neutral-800 text-gray-700 dark:text-neutral-200 hover:bg-gray-200 py-2.5 rounded-xl transition"
+                  >
+                    <ArrowRightLeft size={14} /> A Quiero Ver
+                  </button>
+                )}
+
+                <button
+                  type="submit"
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-2.5 rounded-xl shadow-sm text-sm transition"
+                >
+                  {editingId ? 'Guardar Cambios' : 'Añadir a Colección'}
+                </button>
               </div>
-              <div className="flex items-center">
-                <label className="flex items-center gap-2 cursor-pointer p-3 border dark:border-neutral-700 rounded-lg w-full bg-gray-50 dark:bg-neutral-800 hover:bg-gray-100 dark:hover:bg-neutral-700 transition">
-                  <input type="checkbox" className="w-5 h-5 text-red-600 rounded focus:ring-red-500 accent-red-600 dark:bg-neutral-900 dark:border-neutral-700" checked={selectedBook.abandoned || false} onChange={(e) => handleUpdate({ abandoned: e.target.checked })} />
-                  <span className="text-sm font-medium text-gray-700 dark:text-neutral-200">{lib.abandonedLabel}</span>
-                </label>
-              </div>
-              <div className="grid grid-cols-3 gap-3">
-                <div className="col-span-1">
-                  <label className="block text-sm font-medium text-gray-700 dark:text-neutral-300 mb-1">{lib.pages}</label>
-                  <input type="number" className="w-full p-2 border dark:border-neutral-700 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-neutral-800 dark:text-white" value={selectedBook.pageCount || ''} onChange={(e) => handleUpdate({ pageCount: parseInt(e.target.value) || 0 })} placeholder="Nº" />
-                </div>
-                <div className="col-span-1">
-                  <label className="block text-xs sm:text-sm font-medium text-gray-700 dark:text-neutral-300 mb-1">{lib.startDate}</label>
-                  <input type="date" className="w-full p-2 border dark:border-neutral-700 rounded-lg text-xs sm:text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-neutral-800 dark:text-white" value={selectedBook.startDate || ''} onChange={(e) => handleUpdate({ startDate: e.target.value })} />
-                </div>
-                <div className="col-span-1">
-                  <label className="block text-xs sm:text-sm font-medium text-gray-700 dark:text-neutral-300 mb-1">{lib.endDate}</label>
-                  <input type="date" className="w-full p-2 border dark:border-neutral-700 rounded-lg text-xs sm:text-sm focus:ring-2 focus:ring-indigo-500 outline-none bg-white dark:bg-neutral-800 dark:text-white" value={selectedBook.endDate || ''} onChange={(e) => handleUpdate({ endDate: e.target.value })} />
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-neutral-300 mb-1">{lib.comments}</label>
-                <textarea rows={3} className="w-full p-3 border dark:border-neutral-700 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none resize-none bg-white dark:bg-neutral-800 dark:text-white" placeholder={lib.commentsPlaceholder} value={selectedBook.comment || ''} onChange={(e) => handleUpdate({ comment: e.target.value })} />
-              </div>
-            </div>
-            <div className="p-4 bg-gray-50 dark:bg-neutral-900 border-t dark:border-neutral-800 flex flex-wrap gap-2 rounded-b-2xl">
-              <button onClick={handleDelete} className="flex items-center justify-center gap-2 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900/30 text-red-600 dark:text-red-400 px-4 py-2 rounded-xl hover:bg-red-100 dark:hover:bg-red-900/40 transition text-sm font-medium"><Trash2 size={18} /></button>
-              <button onClick={() => { handleUpdate({ status: 'pendiente' }); setSelectedBook(null) }} className="flex-1 flex items-center justify-center gap-2 bg-white dark:bg-neutral-800 border border-gray-300 dark:border-neutral-700 text-gray-700 dark:text-neutral-200 py-2 rounded-xl hover:bg-gray-100 dark:hover:bg-neutral-700 transition text-sm font-medium"><ArrowRightLeft size={16} />{lib.moveToPending}</button>
-              <button onClick={() => setSelectedBook(null)} className="flex-1 bg-indigo-600 text-white py-2 rounded-xl hover:bg-indigo-700 transition text-sm font-medium">{lib.save}</button>
-            </div>
+            </form>
           </div>
         </div>
       )}
